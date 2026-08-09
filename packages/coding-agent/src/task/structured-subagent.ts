@@ -86,6 +86,8 @@ export interface StructuredSubagentRequest {
 	context?: string;
 	agent?: string;
 	model?: string | string[];
+	/** Specialist role/expertise injected into the subagent system prompt. */
+	role?: string;
 	/** Presence, rather than truthiness, makes this the highest-priority schema. */
 	outputSchema?: unknown;
 	schemaMode?: StructuredSubagentSchemaMode;
@@ -280,8 +282,19 @@ export async function resolveEffectiveSubagentPolicy(
 	}
 	const agentModelOverrides = request.session.settings.get("task.agentModelOverrides");
 	const parentActiveModelPattern = request.session.getActiveModelString?.();
+	// Default-inherit normalization (frozen contract #3): a literal "default"
+	// or "@default" selector means "inherit from agent frontmatter", not "use
+	// the parent session's model". Normalize before modelResolution so the
+	// stripping applies identically to task- and eval-originated requests.
+	const DEFAULT_MODEL_VALUES = new Set(["default", "@default"]);
+	let normalizedRequestModel: string | string[] | undefined = request.model;
+	if (normalizedRequestModel !== undefined) {
+		const selectors = typeof normalizedRequestModel === "string" ? [normalizedRequestModel] : normalizedRequestModel;
+		const filtered = selectors.filter(s => !DEFAULT_MODEL_VALUES.has(s.trim().toLowerCase()));
+		normalizedRequestModel = filtered.length > 0 ? (filtered.length === 1 ? filtered[0] : filtered) : undefined;
+	}
 	const modelResolution = {
-		requestModel: request.model,
+		requestModel: normalizedRequestModel,
 		settingsOverride: agentModelOverrides[agentName],
 		agentModel: effectiveAgent.model,
 		settings: request.session.settings,
@@ -406,6 +419,7 @@ function buildExecutorOptions(
 		parentActiveModelPattern: policy.parentActiveModelPattern,
 		thinkingLevel: policy.effectiveAgent.thinkingLevel,
 		effort: request.effort,
+		role: request.role,
 		...(policy.schema.source === "none"
 			? {}
 			: {

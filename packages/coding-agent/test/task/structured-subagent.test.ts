@@ -581,4 +581,51 @@ describe("structured subagent primitive", () => {
 		expect(await fs.stat(artifactsDir ?? "")).toBeDefined();
 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
 	});
+
+	it("normalizes model: 'default' to undefined so agent frontmatter wins", async () => {
+		const customAgent = { ...AGENT, model: ["anthropic/claude-haiku-4-5:low"] };
+		mockDiscovery(customAgent);
+
+		const policy = await resolveEffectiveSubagentPolicy(request({ model: "default" }));
+
+		// "default" was stripped; modelOverride falls through to the agent definition
+		expect(policy.modelOverride).toEqual(["anthropic/claude-haiku-4-5:low"]);
+	});
+
+	it("normalizes model: ['@default'] to undefined so agent frontmatter wins", async () => {
+		const customAgent = { ...AGENT, model: ["anthropic/claude-haiku-4-5:low"] };
+		mockDiscovery(customAgent);
+
+		const policy = await resolveEffectiveSubagentPolicy(request({ model: ["@default"] }));
+
+		expect(policy.modelOverride).toEqual(["anthropic/claude-haiku-4-5:low"]);
+	});
+
+	it("keeps concrete selectors alongside stripped defaults", async () => {
+		const customAgent = { ...AGENT, model: ["anthropic/claude-haiku-4-5:low"] };
+		mockDiscovery(customAgent);
+
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({ model: ["default", "openai-codex/gpt-5.6-sol:high"] }),
+		);
+
+		// "default" stripped, concrete selector survives as the request-level override
+		expect(policy.modelOverride).toEqual(["openai-codex/gpt-5.6-sol:high"]);
+	});
+
+	it("threads role from request into executor options", async () => {
+		mockDiscovery();
+		const dispatched: executorModule.ExecutorOptions[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			dispatched.push(options);
+			return result();
+		});
+
+		await runStructuredSubagent(
+			request({ role: "Security auditor", retainArtifacts: true }),
+		);
+
+		expect(dispatched[0]?.role).toBe("Security auditor");
+		await fs.rm(dispatched[0]?.artifactsDir ?? "/tmp/nope", { recursive: true, force: true });
+	});
 });

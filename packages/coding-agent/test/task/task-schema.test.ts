@@ -50,6 +50,21 @@ describe("task schema (single-spawn)", () => {
 			expect("schema" in parsed).toBe(false);
 		}
 	});
+
+	it("strips model and role when task.perCallModel is off (gate-off)", () => {
+		const parsed = taskSchema({
+			agent: "scout",
+			task: "Map the auth module.",
+			model: "openai-codex/gpt-5.6-sol:high",
+			role: "Security auditor",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect("model" in parsed).toBe(false);
+			expect("role" in parsed).toBe(false);
+			expect(parsed.task).toBe("Map the auth module.");
+		}
+	});
 });
 
 describe("task spawn validation", () => {
@@ -57,19 +72,19 @@ describe("task spawn validation", () => {
 		vi.restoreAllMocks();
 	});
 
-	function createSession(): ToolSession {
+	function createSession(settings: Record<string, unknown> = {}): ToolSession {
 		return {
 			cwd: "/tmp",
 			hasUI: false,
-			settings: Settings.isolated({ "task.isolation.mode": "none", "task.batch": false }),
+			settings: Settings.isolated({ "task.isolation.mode": "none", "task.batch": false, ...settings }),
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		} as unknown as ToolSession;
 	}
 
-	async function executeText(params: unknown): Promise<string> {
+	async function executeText(params: unknown, settings: Record<string, unknown> = {}): Promise<string> {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
-		const tool = await TaskTool.create(createSession());
+		const tool = await TaskTool.create(createSession(settings));
 		const result = await tool.execute("tool-call", params);
 		return result.content.find(part => part.type === "text")?.text ?? "";
 	}
@@ -84,5 +99,15 @@ describe("task spawn validation", () => {
 	it("rejects a missing task", async () => {
 		const text = await executeText({ agent: "scout" });
 		expect(text).toContain("Missing `task`");
+	});
+
+	it.each([
+		{ model: "" },
+		{ model: " " },
+		{ model: [""] },
+		{ model: ["", ""] },
+	])("rejects an empty model selector (%j)", async invalid => {
+		const text = await executeText({ task: "Work.", ...invalid }, { "task.perCallModel": true });
+		expect(text).toContain("Invalid `model`");
 	});
 });

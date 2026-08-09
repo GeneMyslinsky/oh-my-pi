@@ -105,6 +105,8 @@ export interface SubagentLifecyclePayload {
 
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
 export const LABEL_MAX = 80;
+/** Schema bound on the raw `role` input, before it is label-normalized at every use site. */
+export const ROLE_INPUT_MAX = 256;
 
 // Keep this explicit: ArkType serializes `unknown` as a boolean subschema, which llama.cpp grammars reject.
 const outputSchemaInputSchema = type("object | boolean | string | null");
@@ -139,6 +141,10 @@ export interface TaskItem {
 	task?: string;
 	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
 	effort?: TaskEffort;
+	/** Explicit model selector or fallback chain for this spawn, including optional reasoning suffixes. */
+	model?: string | string[];
+	/** Specialist role/expertise this subagent embodies; shapes its system-prompt identity and display name. */
+	role?: string;
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
@@ -197,9 +203,13 @@ function createTaskSchema(options: {
 	batchEnabled: boolean;
 	defaultAgent: string;
 	effortEnabled: boolean;
+	perCallModel: boolean;
 }): BaseType {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
 	const effortField = options.effortEnabled ? { "effort?": effortRule } : {};
+	const modelFields = options.perCallModel
+		? { "model?": "string>0 | string>0[]", "role?": `string <= ${ROLE_INPUT_MAX}` as const }
+		: {};
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {
 			const item = type.raw({
@@ -207,6 +217,7 @@ function createTaskSchema(options: {
 				agent,
 				task: "string",
 				...effortField,
+				...modelFields,
 				"outputSchema?": outputSchemaInputSchema,
 				"schemaMode?": '"permissive" | "strict"',
 				"isolated?": "boolean",
@@ -223,6 +234,7 @@ function createTaskSchema(options: {
 			agent,
 			task: "string",
 			...effortField,
+			...modelFields,
 			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
 			"+": "delete",
@@ -239,6 +251,7 @@ function createTaskSchema(options: {
 			agent,
 			task: "string",
 			...effortField,
+			...modelFields,
 			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
 			"isolated?": "boolean",
@@ -250,6 +263,7 @@ function createTaskSchema(options: {
 		agent,
 		task: "string",
 		...effortField,
+		...modelFields,
 		"outputSchema?": outputSchemaInputSchema,
 		"schemaMode?": '"permissive" | "strict"',
 		"+": "delete",
@@ -261,18 +275,20 @@ export function getTaskSchema(options: {
 	isolationEnabled: boolean;
 	batchEnabled: boolean;
 	effortEnabled?: boolean;
+	perCallModel?: boolean;
 	defaultAgent?: string;
 }): TaskToolSchemaInstance {
 	const defaultAgent = options.defaultAgent ?? "task";
 	const effortEnabled = options.effortEnabled ?? false;
-	if (defaultAgent === "task" && !effortEnabled) {
+	const perCallModel = options.perCallModel ?? false;
+	if (defaultAgent === "task" && !effortEnabled && !perCallModel) {
 		if (options.batchEnabled) return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
 		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 	}
-	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${defaultAgent}`;
+	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${perCallModel ? "model" : "nomodel"}:${defaultAgent}`;
 	const cached = taskSchemaCache.get(key);
 	if (cached) return cached;
-	const schema = createTaskSchema({ ...options, effortEnabled, defaultAgent });
+	const schema = createTaskSchema({ ...options, effortEnabled, perCallModel, defaultAgent });
 	taskSchemaCache.set(key, schema);
 	return schema;
 }
@@ -292,6 +308,10 @@ export interface TaskParams {
 	task?: string;
 	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
 	effort?: TaskEffort;
+	/** Explicit model selector or fallback chain for this spawn. */
+	model?: string | string[];
+	/** Specialist role/expertise this subagent embodies. */
+	role?: string;
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */

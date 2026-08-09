@@ -139,6 +139,7 @@ interface TaskDescriptionOptions {
 	disabledAgents: string[];
 	batchEnabled: boolean;
 	effortEnabled: boolean;
+	perCallModel: boolean;
 	asyncEnabled: boolean;
 	ircEnabled: boolean;
 	parentSpawns: string;
@@ -174,6 +175,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		applyIsolatedChanges: options.applyIsolatedChanges,
 		batchEnabled: options.batchEnabled,
 		effortEnabled: options.effortEnabled,
+		perCallModel: options.perCallModel,
 		asyncEnabled: options.asyncEnabled,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		ircEnabled: options.ircEnabled,
@@ -222,6 +224,16 @@ function validateEffort(effort: TaskEffort | undefined, label: string): string |
 	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use "lo", "med", or "hi".`;
 }
 
+function hasInvalidModelSelector(model: unknown): boolean {
+	if (model === undefined) return false;
+	const selectors = typeof model === "string" ? [model] : Array.isArray(model) ? model : undefined;
+	return (
+		!selectors ||
+		selectors.length === 0 ||
+		selectors.some(selector => typeof selector !== "string" || !selector.trim())
+	);
+}
+
 function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string | undefined {
 	const hasTask = typeof params.task === "string" && params.task.trim() !== "";
 	const tasks = params.tasks;
@@ -236,6 +248,9 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			const item = tasks[i];
 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
 				return `Task ${i + 1}${item?.name ? ` (\`${item.name}\`)` : ""} is missing \`task\`. Every task needs complete, self-contained instructions.`;
+			}
+			if (hasInvalidModelSelector(item.model)) {
+				return `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""} has an invalid \`model\`. Provide a non-empty selector or a non-empty array of non-empty selectors.`;
 			}
 			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
 			if (effortError) return effortError;
@@ -261,6 +276,9 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
 			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
 	}
+	if (hasInvalidModelSelector(params.model)) {
+		return "Invalid `model`. Provide a non-empty selector or a non-empty array of non-empty selectors.";
+	}
 	return validateEffort(params.effort, "The call");
 }
 
@@ -278,6 +296,8 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
 	if ("outputSchema" in params) item.outputSchema = params.outputSchema;
 	if ("schemaMode" in params) item.schemaMode = params.schemaMode;
 	if ("effort" in params) item.effort = params.effort;
+	if (params.model !== undefined) item.model = params.model;
+	if (params.role !== undefined) item.role = params.role;
 	if ("isolated" in params) item.isolated = params.isolated;
 	return [item];
 }
@@ -299,6 +319,8 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	if ("outputSchema" in item) spawn.outputSchema = item.outputSchema;
 	if ("schemaMode" in item) spawn.schemaMode = item.schemaMode;
 	if ("effort" in item) spawn.effort = item.effort;
+	if (item.model !== undefined) spawn.model = item.model;
+	if (item.role !== undefined) spawn.role = item.role;
 	if (item.isolated !== undefined) {
 		spawn.isolated = item.isolated;
 	} else if ("isolated" in params) {
@@ -486,6 +508,14 @@ export async function refreshAgentDiscovery(cwd: string): Promise<void> {
 	}
 }
 
+function formatModelForApproval(model: unknown): string | undefined {
+	const selectors = typeof model === "string" ? [model] : Array.isArray(model) ? model : [];
+	const normalized = selectors.filter(
+		(selector): selector is string => typeof selector === "string" && !!selector.trim(),
+	);
+	return normalized.length > 0 ? truncateForPrompt(normalized.join(" → ")) : undefined;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tool Class
 // ═══════════════════════════════════════════════════════════════════════════
@@ -512,6 +542,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		if (typeof params.task === "string") {
 			lines.push(`Task:\n${truncateForPrompt(params.task)}`);
 		}
+		const model = formatModelForApproval(params.model);
+		if (model) lines.push(`Model: ${model}`);
 		if (typeof params.context === "string" && params.context.trim()) {
 			lines.push(`Context:\n${truncateForPrompt(params.context)}`);
 		}
@@ -542,6 +574,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				if ("task" in firstTask && typeof firstTask.task === "string") {
 					lines.push(`Task:\n${truncateForPrompt(firstTask.task)}`);
 				}
+				const itemModel = formatModelForApproval(
+					firstTask && typeof firstTask === "object" && "model" in firstTask ? firstTask.model : undefined,
+				);
+				if (itemModel) lines.push(`Model: ${itemModel}`);
 			}
 			if (tasks.length > 1) {
 				lines.push(`+${tasks.length - 1} more task${tasks.length === 2 ? "" : "s"}`);
@@ -588,6 +624,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			isolationEnabled,
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: this.session.settings.get("task.enableEffort"),
+			perCallModel: this.session.settings.get("task.perCallModel"),
 			defaultAgent,
 		});
 	}
@@ -608,6 +645,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			disabledAgents,
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: this.session.settings.get("task.enableEffort"),
+			perCallModel: this.session.settings.get("task.perCallModel"),
 			asyncEnabled: this.session.settings.get("async.enabled"),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
@@ -646,12 +684,17 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	 * task wire contract.
 	 */
 	#resolveSpawnPreflight(params: TaskParams) {
+		const perCallModel = this.session.settings.get("task.perCallModel") as boolean;
 		return resolveEffectiveSubagentPolicy({
 			session: this.session,
 			invocationKind: "task",
 			assignment: (params.task ?? "").trim(),
 			context: this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined,
 			agent: params.agent,
+			// Defense in depth: only forward model/role when the gate is on,
+			// even though the schema already strips them when off.
+			...(perCallModel && params.model !== undefined ? { model: params.model } : {}),
+			...(perCallModel && params.role !== undefined ? { role: params.role } : {}),
 			...(Object.hasOwn(params, "outputSchema") ? { outputSchema: params.outputSchema } : {}),
 			...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
 			...(params.effort !== undefined ? { effort: params.effort } : {}),
@@ -1415,12 +1458,16 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const context = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		let latestProgress: AgentProgress | undefined;
 		try {
+			const perCallModel = this.session.settings.get("task.perCallModel") as boolean;
 			const execution = await runStructuredSubagent({
 				session: this.session,
 				invocationKind: "task",
 				assignment,
 				context,
 				agent: params.agent,
+				// Defense in depth: only forward model/role when the gate is on.
+				...(perCallModel && params.model !== undefined ? { model: params.model } : {}),
+				...(perCallModel && params.role !== undefined ? { role: params.role } : {}),
 				...(Object.hasOwn(params, "outputSchema") ? { outputSchema: params.outputSchema } : {}),
 				...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
 				...(params.effort !== undefined ? { effort: params.effort } : {}),

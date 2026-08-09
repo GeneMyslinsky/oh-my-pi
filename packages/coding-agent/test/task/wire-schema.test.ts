@@ -99,6 +99,63 @@ describe("task wire schema", () => {
 	});
 });
 
+describe("task.perCallModel schema gating", () => {
+	it("gate off yields byte-identical wire schema for all flag combinations", () => {
+		// This test captures the contract that gate-off schemas are identical to
+		// pre-change behavior. We compare gate-off vs. a schema that explicitly
+		// has no model fields.
+		for (const batchEnabled of [false, true]) {
+			for (const isolationEnabled of [false, true]) {
+				const gateOff = getTaskSchema({ batchEnabled, isolationEnabled, perCallModel: false });
+				const baseline = getTaskSchema({ batchEnabled, isolationEnabled });
+				// Both references should be the exact same cached object (fast path)
+				expect(gateOff).toBe(baseline);
+			}
+		}
+	});
+
+	it("gate on exposes model and role on the flat schema", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: true });
+		const parsed = schema({
+			agent: "scout",
+			task: "Map the auth flow.",
+			model: "openai-codex/gpt-5.6-sol:high",
+			role: "Security auditor",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect(parsed.model).toBe("openai-codex/gpt-5.6-sol:high");
+			expect(parsed.role).toBe("Security auditor");
+		}
+	});
+
+	it("gate on accepts model as an array", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: true });
+		const parsed = schema({
+			task: "Work.",
+			model: ["anthropic/claude-sonnet-4", "openai/gpt-5"],
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect(parsed.model).toEqual(["anthropic/claude-sonnet-4", "openai/gpt-5"]);
+		}
+	});
+
+	it("gate off strips model and role from wire input", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: false });
+		const parsed = schema({
+			task: "Work.",
+			model: "openai-codex/gpt-5.6-sol:high",
+			role: "Security auditor",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect("model" in parsed).toBe(false);
+			expect("role" in parsed).toBe(false);
+		}
+	});
+});
+
 // Contract: `agent` and `name` shape the spawned subagent's identity and the
 // task text is the work being authorized, so an approval-gated session must
 // surface them before the user authorizes the spawn.
@@ -128,6 +185,37 @@ describe("task approval details surface the dispatch", () => {
 		expect(lines).toContain("Agent: reviewer");
 		expect(lines).toContain("Name: ReviewAuth");
 		expect(lines).toContain("Task:\naudit the auth module");
+	});
+
+	it("surfaces agent, name, model, and task for a flat spawn", async () => {
+		const tool = await makeTool();
+		const lines = tool.formatApprovalDetails({
+			agent: "reviewer",
+			name: "ReviewAuth",
+			task: "audit the auth module",
+			model: "openai-codex/gpt-5.6-sol:high",
+		});
+		expect(lines).toContain("Agent: reviewer");
+		expect(lines).toContain("Name: ReviewAuth");
+		expect(lines).toContain("Model: openai-codex/gpt-5.6-sol:high");
+		expect(lines).toContain("Task:\naudit the auth module");
+	});
+
+	it("surfaces model fallback chain in batch items", async () => {
+		const tool = await makeTool();
+		const lines = tool.formatApprovalDetails({
+			context: "shared background",
+			tasks: [
+				{
+					name: "DbMigrator",
+					agent: "sonic",
+					model: ["anthropic/claude-sonnet-4", "openai/gpt-5"],
+					task: "migrate the schema",
+				},
+				{ task: "second item" },
+			],
+		});
+		expect(lines).toContain("Model: anthropic/claude-sonnet-4 → openai/gpt-5");
 	});
 
 	it("summarizes a homogeneous batch whose agents use the session default", async () => {

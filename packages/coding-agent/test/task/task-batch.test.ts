@@ -194,6 +194,28 @@ describe("task.batch schema gating", () => {
 		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
 		expect(getSchemaProperties(batch).schema).toBeUndefined();
 	});
+
+	it("hides model and role by default and exposes them when task.perCallModel is enabled", async () => {
+		mockDiscovery();
+
+		const flatSession = createSession({ settings: { "task.batch": false } });
+		const flat = await TaskTool.create(flatSession);
+		expect(getSchemaProperties(flat).model).toBeUndefined();
+		expect(getSchemaProperties(flat).role).toBeUndefined();
+
+		flatSession.settings.override("task.perCallModel", true);
+		expect(getSchemaProperties(flat).model).toBeDefined();
+		expect(getSchemaProperties(flat).role).toBeDefined();
+
+		const batchSession = createSession({ settings: { "task.batch": true } });
+		const batch = await TaskTool.create(batchSession);
+		expect(getBatchItemProperties(batch).model).toBeUndefined();
+		expect(getBatchItemProperties(batch).role).toBeUndefined();
+
+		batchSession.settings.override("task.perCallModel", true);
+		expect(getBatchItemProperties(batch).model).toBeDefined();
+		expect(getBatchItemProperties(batch).role).toBeDefined();
+	});
 });
 
 describe("task.batch validation", () => {
@@ -276,6 +298,17 @@ describe("task.batch validation", () => {
 		);
 		expect(text).toContain("task.batch is disabled");
 		expect(text).not.toContain("was missing");
+	});
+
+	it("rejects an empty per-item model selector", async () => {
+		const text = await executeText(
+			{
+				context: "Background.",
+				tasks: [{ name: "Alpha", task: "Work.", model: [""] }],
+			},
+			{ "task.batch": true, "task.perCallModel": true },
+		);
+		expect(text).toContain("invalid `model`");
 	});
 });
 
@@ -652,5 +685,49 @@ describe("task.batch spawning", () => {
 		expect(last?.async?.state).toBe("failed");
 		expect(last?.progress?.find(p => p.id === "Second")?.status).toBe("aborted");
 		expect(last?.progress?.find(p => p.id === "First")?.status).toBe("completed");
+	});
+
+	it("forwards per-item model when task.perCallModel is on and suppresses it when off", async () => {
+		mockDiscovery();
+		const seen: Array<{ id?: string; modelOverride?: string | string[] }> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			seen.push({ id: options.id, modelOverride: options.modelOverride });
+			return makeResult(options.id ?? "?");
+		});
+
+		// Gate ON: model forwarded
+		const managerOn = createManager();
+		const toolOn = await TaskTool.create(
+			createSession({
+				manager: managerOn,
+				settings: { "async.enabled": true, "task.batch": true, "task.perCallModel": true },
+			}),
+		);
+		const resultOn = await toolOn.execute("tc-model-on", {
+			context: "ctx",
+			tasks: [{ name: "GatedOn", task: "Work.", model: "openai-codex/gpt-5.6-sol:high" }],
+		} as TaskParams);
+		await managerOn.getJob(resultOn.details!.async!.jobId)!.promise;
+		const gatedOnSpawn = seen.find(s => s.id === "GatedOn");
+		expect(gatedOnSpawn?.modelOverride).toEqual(["openai-codex/gpt-5.6-sol:high"]);
+
+		// Gate OFF: model NOT forwarded (defense in depth)
+		seen.length = 0;
+		const managerOff = createManager();
+		const toolOff = await TaskTool.create(
+			createSession({
+				manager: managerOff,
+				settings: { "async.enabled": true, "task.batch": true, "task.perCallModel": false },
+			}),
+		);
+		const resultOff = await toolOff.execute("tc-model-off", {
+			context: "ctx",
+			// model present in raw params but gate is off — schema strips it,
+			// and defense-in-depth in #resolveSpawnPreflight also suppresses it
+			tasks: [{ name: "GatedOff", task: "Work.", model: "openai-codex/gpt-5.6-sol:high" }],
+		} as TaskParams);
+		await managerOff.getJob(resultOff.details!.async!.jobId)!.promise;
+		const gatedOffSpawn = seen.find(s => s.id === "GatedOff");
+		expect(gatedOffSpawn?.modelOverride).toEqual([]);
 	});
 });
