@@ -313,7 +313,9 @@ describe("runEvalAgent", () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		await expect(runEvalAgent({ prompt: "work", model: "p/override" }, { session: makeSession() })).rejects.toMatchObject({
+		await expect(
+			runEvalAgent({ prompt: "work", model: "p/override" }, { session: makeSession() }),
+		).rejects.toMatchObject({
 			message: "agent() model override is disabled. Enable task.perCallModel to allow per-call model selection.",
 		});
 		expect(runSpy).not.toHaveBeenCalled();

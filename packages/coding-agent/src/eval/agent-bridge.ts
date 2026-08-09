@@ -126,7 +126,9 @@ function buildSubagentFailureMessage(agentName: string, result: SingleResult): s
 export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOptions): Promise<EvalAgentResult> {
 	const parsed = parseAgentArgs(args);
 	if (Object.hasOwn(parsed, "model") && !options.session.settings.get("task.perCallModel")) {
-		throw new ToolError("agent() model override is disabled. Enable task.perCallModel to allow per-call model selection.");
+		throw new ToolError(
+			"agent() model override is disabled. Enable task.perCallModel to allow per-call model selection.",
+		);
 	}
 	const turnBudget = options.session.getTurnBudget?.();
 	if (turnBudget?.hard && turnBudget.total !== null && turnBudget.spent >= turnBudget.total) {
