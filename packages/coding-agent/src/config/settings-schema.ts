@@ -4741,6 +4741,17 @@ export const SETTINGS_SCHEMA = {
 				"Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, toggled with P in /agents) and user agent `prewalk` frontmatter apply regardless of this toggle.",
 		},
 	},
+	"task.perCallModel": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tasks",
+			group: "Subagents",
+			label: "Per-Call Model Override",
+			description:
+				"Expose an optional per-item `model` (and `role` persona) selector on the task tool wire schema and accept a per-call `model` on the eval `agent()` helper. Off by default: hides the fields from the model-visible schema so orchestrating models cannot emit them unprompted (see upstream #6438). An explicit `default`/`@default` selector is treated as omitted and inherits the agent's frontmatter routing.",
+		},
+	},
 
 	"tasks.todoClearDelay": {
 		type: "number",
