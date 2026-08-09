@@ -53,7 +53,7 @@ describe("eval js agent() handle", () => {
 		expect(out).toBe("hello world");
 	});
 
-	it("keeps positional isolation controls stable while appending schemaMode", async () => {
+	it("keeps positional isolation controls stable while appending model and schemaMode", async () => {
 		let seenArgs: Record<string, unknown> | undefined;
 		const sandbox = loadPrelude(async (_name, args) => {
 			seenArgs = args as Record<string, unknown>;
@@ -66,17 +66,34 @@ describe("eval js agent() handle", () => {
 		) => Promise<unknown>;
 		const schema = { type: "object", properties: { ok: { type: "boolean" } } };
 
-		await positionalAgent("scout", "reviewer", "Legacy", schema, true, false, true, "strict");
+		await positionalAgent("scout", "reviewer", "p/model", "Legacy", schema, true, false, true, "strict");
 
 		expect(seenArgs).toEqual({
 			prompt: "scout",
 			agent: "reviewer",
 			label: "Legacy",
+			model: "p/model",
 			schema,
 			isolated: true,
 			apply: false,
 			merge: true,
 			schemaMode: "strict",
+			handle: false,
+		});
+	});
+
+	it("forwards model from the object options form", async () => {
+		let seenArgs: Record<string, unknown> | undefined;
+		const sandbox = loadPrelude(async (_name, args) => {
+			seenArgs = args as Record<string, unknown>;
+			return { text: "ok", details: { agent: "task", id: "object", structured: false } };
+		});
+
+		await (sandbox.agent as AgentHelper)("scout", { model: "p/model", handle: false });
+
+		expect(seenArgs).toEqual({
+			prompt: "scout",
+			model: "p/model",
 			handle: false,
 		});
 	});
