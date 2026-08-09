@@ -124,8 +124,9 @@ describe("task.perCallModel schema gating", () => {
 		});
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
-			expect(parsed.model).toBe("openai-codex/gpt-5.6-sol:high");
-			expect(parsed.role).toBe("Security auditor");
+			const result = parsed as Record<string, unknown>;
+			expect(result.model).toBe("openai-codex/gpt-5.6-sol:high");
+			expect(result.role).toBe("Security auditor");
 		}
 	});
 
@@ -137,7 +138,8 @@ describe("task.perCallModel schema gating", () => {
 		});
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
-			expect(parsed.model).toEqual(["anthropic/claude-sonnet-4", "openai/gpt-5"]);
+			const result = parsed as Record<string, unknown>;
+			expect(result.model).toEqual(["anthropic/claude-sonnet-4", "openai/gpt-5"]);
 		}
 	});
 
@@ -150,8 +152,9 @@ describe("task.perCallModel schema gating", () => {
 		});
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
-			expect("model" in parsed).toBe(false);
-			expect("role" in parsed).toBe(false);
+			const result = parsed as Record<string, unknown>;
+			expect("model" in result).toBe(false);
+			expect("role" in result).toBe(false);
 		}
 	});
 });
