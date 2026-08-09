@@ -101,13 +101,11 @@ describe("task spawn validation", () => {
 		expect(text).toContain("Missing `task`");
 	});
 
-	it.each([
-		{ model: "" },
-		{ model: " " },
-		{ model: [""] },
-		{ model: ["", ""] },
-	])("rejects an empty model selector (%j)", async invalid => {
-		const text = await executeText({ task: "Work.", ...invalid }, { "task.perCallModel": true });
-		expect(text).toContain("Invalid `model`");
-	});
+	it.each([{ model: "" }, { model: " " }, { model: [""] }, { model: ["", ""] }])(
+		"rejects an empty model selector (%j)",
+		async invalid => {
+			const text = await executeText({ task: "Work.", ...invalid }, { "task.perCallModel": true });
+			expect(text).toContain("Invalid `model`");
+		},
+	);
 });

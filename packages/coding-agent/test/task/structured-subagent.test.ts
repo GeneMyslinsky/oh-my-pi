@@ -621,9 +621,7 @@ describe("structured subagent primitive", () => {
 			return result();
 		});
 
-		await runStructuredSubagent(
-			request({ role: "Security auditor", retainArtifacts: true }),
-		);
+		await runStructuredSubagent(request({ role: "Security auditor", retainArtifacts: true }));
 
 		expect(dispatched[0]?.role).toBe("Security auditor");
 		await fs.rm(dispatched[0]?.artifactsDir ?? "/tmp/nope", { recursive: true, force: true });

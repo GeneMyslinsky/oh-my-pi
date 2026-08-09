@@ -67,6 +67,7 @@ import {
 	type AgentProgress,
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
+	oneLineLabel,
 	ROLE_INPUT_MAX,
 	type SingleResult,
 	type StructuredSubagentOutput,
@@ -77,7 +78,6 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 	type TaskToolDetails,
 	type YieldItem,
-	oneLineLabel,
 } from "./types";
 import { arrayValuedLabels, assembleYieldResult } from "./yield-assembly";
 
@@ -3036,7 +3036,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				preloadedExtensionPaths: restrictToolNames ? [] : options.preloadedExtensionPaths,
 				preloadedCustomToolPaths: restrictToolNames ? [] : options.preloadedCustomToolPaths,
 				systemPrompt: defaultPrompt => {
-				const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
+					const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 						agent: agent.systemPrompt,
 						role: options.role ? oneLineLabel(options.role, ROLE_INPUT_MAX) : "",
 						context: options.context?.trim() ?? "",
