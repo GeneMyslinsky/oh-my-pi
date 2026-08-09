@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added gated per-call model and role overrides for task subagents, plus gated model overrides for eval `agent()` calls. `default` and `@default` inherit the selected agent routing to avoid the parent-model override from [#6438](https://github.com/can1357/oh-my-pi/issues/6438).
+
 ## [17.2.12] - 2026-08-08
 
 ### Fixed
