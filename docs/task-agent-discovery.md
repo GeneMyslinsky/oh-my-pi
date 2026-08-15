@@ -202,11 +202,14 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 For task dispatch, model precedence is:
 
-1. `task.agentModelOverrides[agentName]`
-2. the agent frontmatter's prioritized `model` list
-3. the parent's active model, then its configured/default model fallback
+1. per-call `model` (unless `task.perCallModel=false` — default on; a literal `"default"` or `"@default"` is treated as omitted)
+2. `task.agentModelOverrides[agentName]`
+3. the agent frontmatter's prioritized `model` list
+4. the parent's active model, then its configured/default model fallback
 
-Role aliases in either of the first two sources are expanded through `modelRoles`. The shared eval bridge can also supply an invocation-local model override ahead of the settings override; the task wire schema does not expose that field.
+Role aliases in either of the first three sources are expanded through `modelRoles`. The shared eval bridge can also supply an invocation-local model override ahead of the settings override.
+
+The task item's optional `role` is a prompt-only specialist persona, not a `modelRoles` alias. It remains available when `task.perCallModel=false` and does not change agent or model selection.
 
 Service-tier precedence is independent of model selection: an exact, case-sensitive
 `task.agentServiceTierOverrides[agentName]` entry overrides `tier.subagent`; an absent entry preserves

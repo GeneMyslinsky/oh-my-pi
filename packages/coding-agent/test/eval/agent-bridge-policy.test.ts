@@ -340,19 +340,69 @@ describe("runEvalAgent", () => {
 		expect(secondOptions.outputSchemaOverridesAgent).toBeUndefined();
 	});
 
-	it("drops a per-call model argument on agent() (removed, issue #6438)", async () => {
+	it("rejects model overrides while task.perCallModel is disabled", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 
-		// The schema strips unknown keys; a legacy `model` argument is silently
-		// discarded so resolution is identical to omitting it — the agent's own
-		// frontmatter model applies (issue #6438).
-		await runEvalAgentAndWait({ prompt: "work", model: "default" }, { session: makeSession() });
-		await runEvalAgentAndWait({ prompt: "work" }, { session: makeSession() });
+		await expect(
+			runEvalAgent(
+				{ prompt: "work", model: "p/override" },
+				{
+					session: makeSession({
+						settings: Settings.isolated({
+							"async.enabled": false,
+							"task.isolation.enabled": false,
+							"task.enableLsp": true,
+							"task.perCallModel": false,
+						}),
+					}),
+				},
+			),
+		).rejects.toMatchObject({
+			message: "agent() model override is disabled. Enable task.perCallModel to allow per-call model selection.",
+		});
+		expect(runSpy).not.toHaveBeenCalled();
+	});
 
-		const withModel = runSpy.mock.calls[0]?.[0];
-		const withoutModel = runSpy.mock.calls[1]?.[0];
-		expect(withModel?.modelOverride).toEqual(withoutModel?.modelOverride);
+	it("forwards enabled model overrides as single selectors and ordered fallback lists", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+		const session = makeSession({
+			settings: Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.enabled": false,
+				"task.enableLsp": true,
+				"task.perCallModel": true,
+			}),
+		});
+
+		await runEvalAgentAndWait({ prompt: "single", model: "p/override" }, { session });
+		await runEvalAgentAndWait({ prompt: "fallback", model: ["p/primary", "p/fallback"] }, { session });
+
+		expect(runSpy.mock.calls[0]?.[0].modelOverride).toEqual(["p/override"]);
+		expect(runSpy.mock.calls[1]?.[0].modelOverride).toEqual(["p/primary", "p/fallback"]);
+	});
+
+	it("inherits the selected agent model when model is omitted and keeps unknown fields deleted", async () => {
+		mockAgents();
+		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
+		const session = makeSession({
+			settings: Settings.isolated({
+				"async.enabled": false,
+				"task.isolation.enabled": false,
+				"task.enableLsp": true,
+				"task.perCallModel": true,
+			}),
+		});
+
+		await runEvalAgentAndWait({ prompt: "inherited" }, { session });
+		await runEvalAgentAndWait({ prompt: "legacy", legacy: "ignored" }, { session });
+
+		const inherited = runSpy.mock.calls[0]?.[0];
+		const legacy = runSpy.mock.calls[1]?.[0];
+		expect(inherited?.modelOverride).toEqual(["p/active"]);
+		expect(legacy?.modelOverride).toEqual(["p/active"]);
+		expect(legacy).not.toHaveProperty("legacy");
 	});
 	it("returns host-parsed data for caller, agent, and inherited schemas", async () => {
 		const agentSchema = { type: "object" };

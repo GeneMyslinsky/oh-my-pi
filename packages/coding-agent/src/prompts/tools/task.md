@@ -32,6 +32,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
 {{/if}}
 {{#if effortEnabled}}  - `effort`: Scale w/ complexity of this task: `"lo"`|`"med"`|`"hi"`
 {{/if}}
+{{#if perCallModel}}  - `model`: Optional model selector or ordered fallback chain — concrete `provider/model[:thinking]` selectors and `@role` aliases. Omit to keep the agent's configured routing; NEVER pass your own model, `"default"`, or `"@default"` (the latter two are treated as omitted).
+{{/if}}
+  - `role`: Specialist persona (≤256 chars). Shapes the subagent's system-prompt identity and how it approaches the assignment.
   - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
   - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}
@@ -51,6 +54,9 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
 {{/if}}
 {{#if effortEnabled}}- `effort`: Scale w/ complexity of this task: `"lo"`|`"med"`|`"hi"`
 {{/if}}
+{{#if perCallModel}}- `model`: Optional model selector or ordered fallback chain — concrete `provider/model[:thinking]` selectors and `@role` aliases. Omit to keep the agent's configured routing; NEVER pass your own model, `"default"`, or `"@default"` (the latter two are treated as omitted).
+{{/if}}
+- `role`: Specialist persona (≤256 chars). Shapes the subagent's system-prompt identity and how it approaches the assignment.
 - `outputSchema`: Invocation-specific JSON Schema. Overrides the selected agent and parent-session schemas.
 - `schemaMode`: `"permissive"` (default) accepts a retry-exhausted invalid result with a warning; `"strict"` fails it.
 {{#if isolationEnabled}}

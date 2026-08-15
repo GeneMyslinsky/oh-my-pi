@@ -105,6 +105,8 @@ export interface SubagentLifecyclePayload {
 
 /** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
 export const LABEL_MAX = 80;
+/** Schema bound on the raw `role` input before it is injected into the subagent system prompt. */
+export const ROLE_INPUT_MAX = 256;
 
 // Keep this explicit: ArkType serializes `unknown` as a boolean subschema, which llama.cpp grammars reject.
 const outputSchemaInputSchema = type("object | boolean | string | null");
@@ -115,6 +117,7 @@ export const taskItemSchema = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"role?": `string <= ${ROLE_INPUT_MAX}`,
 	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
 	"tools?": "string[]",
@@ -124,6 +127,7 @@ const taskItemSchemaIsolated = type({
 	"name?": "string",
 	agent: "string = 'task'",
 	task: "string",
+	"role?": `string <= ${ROLE_INPUT_MAX}`,
 	"outputSchema?": outputSchemaInputSchema,
 	"schemaMode?": '"permissive" | "strict"',
 	"tools?": "string[]",
@@ -141,6 +145,10 @@ export interface TaskItem {
 	task?: string;
 	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
 	effort?: TaskEffort;
+	/** Explicit model selector or fallback chain for this spawn, including optional reasoning suffixes. */
+	model?: string | string[];
+	/** Temporary specialist persona injected into this spawn's system prompt. */
+	role?: string;
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */
@@ -156,6 +164,7 @@ export const taskSchema = type({
 	agent: "string = 'task'",
 	task: "string",
 	"outputSchema?": outputSchemaInputSchema,
+	"role?": `string <= ${ROLE_INPUT_MAX}`,
 	"schemaMode?": '"permissive" | "strict"',
 	"tools?": "string[]",
 	"isolated?": "boolean",
@@ -166,6 +175,7 @@ const taskSchemaNoIsolation = type({
 	agent: "string = 'task'",
 	task: "string",
 	"outputSchema?": outputSchemaInputSchema,
+	"role?": `string <= ${ROLE_INPUT_MAX}`,
 	"schemaMode?": '"permissive" | "strict"',
 	"tools?": "string[]",
 	"+": "delete",
@@ -204,10 +214,12 @@ function createTaskSchema(options: {
 	defaultAgent: string;
 	effortEnabled: boolean;
 	evalToolsEnabled: boolean;
+	perCallModel: boolean;
 }): BaseType {
 	const agent = taskAgentSchemaRule(options.defaultAgent);
 	const effortField = options.effortEnabled ? { "effort?": effortRule } : {};
 	const toolsField = options.evalToolsEnabled ? { "tools?": "string[]" } : {};
+	const modelField = options.perCallModel ? { "model?": "string>0 | string>0[]" } : {};
 	if (options.batchEnabled) {
 		if (options.isolationEnabled) {
 			const item = type.raw({
@@ -215,6 +227,8 @@ function createTaskSchema(options: {
 				agent,
 				task: "string",
 				...effortField,
+				...modelField,
+				"role?": `string <= ${ROLE_INPUT_MAX}`,
 				"outputSchema?": outputSchemaInputSchema,
 				"schemaMode?": '"permissive" | "strict"',
 				...toolsField,
@@ -232,6 +246,8 @@ function createTaskSchema(options: {
 			agent,
 			task: "string",
 			...effortField,
+			...modelField,
+			"role?": `string <= ${ROLE_INPUT_MAX}`,
 			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
 			...toolsField,
@@ -249,6 +265,8 @@ function createTaskSchema(options: {
 			agent,
 			task: "string",
 			...effortField,
+			...modelField,
+			"role?": `string <= ${ROLE_INPUT_MAX}`,
 			"outputSchema?": outputSchemaInputSchema,
 			"schemaMode?": '"permissive" | "strict"',
 			...toolsField,
@@ -261,6 +279,8 @@ function createTaskSchema(options: {
 		agent,
 		task: "string",
 		...effortField,
+		...modelField,
+		"role?": `string <= ${ROLE_INPUT_MAX}`,
 		"outputSchema?": outputSchemaInputSchema,
 		"schemaMode?": '"permissive" | "strict"',
 		...toolsField,
@@ -275,19 +295,22 @@ export function getTaskSchema(options: {
 	effortEnabled?: boolean;
 	/** Advertise the `tools` field for eval-defined tools (`eval.tools.enabled`, default on). */
 	evalToolsEnabled?: boolean;
+	/** Advertise per-spawn `model` fields (`task.perCallModel`, default off here). */
+	perCallModel?: boolean;
 	defaultAgent?: string;
 }): TaskToolSchemaInstance {
 	const defaultAgent = options.defaultAgent ?? "task";
 	const effortEnabled = options.effortEnabled ?? false;
 	const evalToolsEnabled = options.evalToolsEnabled ?? true;
-	if (defaultAgent === "task" && !effortEnabled && evalToolsEnabled) {
+	const perCallModel = options.perCallModel ?? false;
+	if (defaultAgent === "task" && !effortEnabled && evalToolsEnabled && !perCallModel) {
 		if (options.batchEnabled) return options.isolationEnabled ? taskSchemaBatch : taskSchemaBatchNoIsolation;
 		return options.isolationEnabled ? taskSchema : taskSchemaNoIsolation;
 	}
-	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${evalToolsEnabled ? "tools" : "notools"}:${defaultAgent}`;
+	const key = `${options.isolationEnabled ? "iso" : "flat"}:${options.batchEnabled ? "batch" : "single"}:${effortEnabled ? "effort" : "default"}:${evalToolsEnabled ? "tools" : "notools"}:${perCallModel ? "model" : "nomodel"}:${defaultAgent}`;
 	const cached = taskSchemaCache.get(key);
 	if (cached) return cached;
-	const schema = createTaskSchema({ ...options, effortEnabled, evalToolsEnabled, defaultAgent });
+	const schema = createTaskSchema({ ...options, effortEnabled, evalToolsEnabled, perCallModel, defaultAgent });
 	taskSchemaCache.set(key, schema);
 	return schema;
 }
@@ -307,6 +330,10 @@ export interface TaskParams {
 	task?: string;
 	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
 	effort?: TaskEffort;
+	/** Explicit model selector or fallback chain for this spawn. */
+	model?: string | string[];
+	/** Specialist role/expertise this subagent embodies. */
+	role?: string;
 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
 	outputSchema?: unknown;
 	/** Validation behavior for a caller-provided or inherited output schema. */

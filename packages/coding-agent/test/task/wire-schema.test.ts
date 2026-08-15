@@ -6,10 +6,10 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { getTaskSchema, oneLineLabel } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
-// Contract: the task tool's wire shape is flat `{ name?, agent?, task, isolated? }`
+// Contract: the task tool's wire shape is flat `{ name?, agent?, task, role?, isolated? }`
 // (batch: `{ context, tasks[] }` of the same items). `agent` defaults to the
-// schema's spawn-policy default, and unknown keys sent by stale callers (`role`,
-// `description`) are stripped by the schema's `+: "delete"` — never rejected.
+// schema's spawn-policy default, and unknown keys sent by stale callers
+// (`description`, for example) are stripped by `+: "delete"` — never rejected.
 
 describe("oneLineLabel", () => {
 	it("returns short text unchanged", () => {
@@ -66,11 +66,11 @@ describe("task wire schema", () => {
 		}
 	});
 
-	it("deletes stale caller keys (role, description) instead of rejecting", () => {
+	it("retains role while deleting stale caller keys", () => {
 		const parsed = taskSchema({ agent: "task", task: "x", role: "Rust specialist", description: "stale ui label" });
 		expect(parsed instanceof type.errors).toBe(false);
 		if (!(parsed instanceof type.errors)) {
-			expect("role" in parsed).toBe(false);
+			expect(parsed.role).toBe("Rust specialist");
 			expect("description" in parsed).toBe(false);
 			expect(parsed.task).toBe("x");
 		}
@@ -90,12 +90,81 @@ describe("task wire schema", () => {
 		expect(items[1]?.agent).toBe("reviewer");
 	});
 
-	it("deletes stale keys from batch items", () => {
+	it("retains role while deleting stale keys from batch items", () => {
 		const batch = getTaskSchema({ isolationEnabled: false, batchEnabled: true });
-		const items = parsedItems(batch({ context: "ctx", tasks: [{ task: "x", role: "DB migration specialist" }] }));
+		const items = parsedItems(
+			batch({ context: "ctx", tasks: [{ task: "x", role: "DB migration specialist", description: "stale" }] }),
+		);
 		const item = items[0] ?? {};
-		expect("role" in item).toBe(false);
+		expect(item.role).toBe("DB migration specialist");
+		expect("description" in item).toBe(false);
 		expect(item.task).toBe("x");
+	});
+});
+
+describe("task.perCallModel schema gating", () => {
+	it("gate off yields byte-identical wire schema for all flag combinations", () => {
+		// This test captures the contract that gate-off schemas are identical to
+		// pre-change behavior. We compare gate-off vs. a schema that explicitly
+		// has no model fields.
+		for (const batchEnabled of [false, true]) {
+			for (const isolationEnabled of [false, true]) {
+				const gateOff = getTaskSchema({ batchEnabled, isolationEnabled, perCallModel: false });
+				const baseline = getTaskSchema({ batchEnabled, isolationEnabled });
+				// Both references should be the exact same cached object (fast path)
+				expect(gateOff).toBe(baseline);
+			}
+		}
+	});
+
+	it("gate on exposes model alongside role on the flat schema", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: true });
+		const parsed = schema({
+			agent: "scout",
+			task: "Map the auth flow.",
+			model: "openai-codex/gpt-5.6-sol:high",
+			role: "Security auditor",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			const result = parsed as Record<string, unknown>;
+			expect(result.model).toBe("openai-codex/gpt-5.6-sol:high");
+			expect(result.role).toBe("Security auditor");
+		}
+	});
+
+	it("gate on accepts model as an array", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: true });
+		const parsed = schema({
+			task: "Work.",
+			model: ["anthropic/claude-sonnet-4", "openai/gpt-5"],
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			const result = parsed as Record<string, unknown>;
+			expect(result.model).toEqual(["anthropic/claude-sonnet-4", "openai/gpt-5"]);
+		}
+	});
+
+	it("gate off strips model and preserves role in wire input", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: false });
+		const parsed = schema({
+			task: "Work.",
+			model: "openai-codex/gpt-5.6-sol:high",
+			role: "Security auditor",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			const result = parsed as Record<string, unknown>;
+			expect("model" in result).toBe(false);
+			expect(result.role).toBe("Security auditor");
+		}
+	});
+
+	it("limits role personas to 256 characters regardless of the model gate", () => {
+		const schema = getTaskSchema({ batchEnabled: false, isolationEnabled: false, perCallModel: false });
+		expect(schema({ task: "Work.", role: "x".repeat(256) }) instanceof type.errors).toBe(false);
+		expect(schema({ task: "Work.", role: "x".repeat(257) }) instanceof type.errors).toBe(true);
 	});
 });
 
@@ -128,6 +197,37 @@ describe("task approval details surface the dispatch", () => {
 		expect(lines).toContain("Agent: reviewer");
 		expect(lines).toContain("Name: ReviewAuth");
 		expect(lines).toContain("Task:\naudit the auth module");
+	});
+
+	it("surfaces agent, name, model, and task for a flat spawn", async () => {
+		const tool = await makeTool();
+		const lines = tool.formatApprovalDetails({
+			agent: "reviewer",
+			name: "ReviewAuth",
+			task: "audit the auth module",
+			model: "openai-codex/gpt-5.6-sol:high",
+		});
+		expect(lines).toContain("Agent: reviewer");
+		expect(lines).toContain("Name: ReviewAuth");
+		expect(lines).toContain("Model: openai-codex/gpt-5.6-sol:high");
+		expect(lines).toContain("Task:\naudit the auth module");
+	});
+
+	it("surfaces model fallback chain in batch items", async () => {
+		const tool = await makeTool();
+		const lines = tool.formatApprovalDetails({
+			context: "shared background",
+			tasks: [
+				{
+					name: "DbMigrator",
+					agent: "sonic",
+					model: ["anthropic/claude-sonnet-4", "openai/gpt-5"],
+					task: "migrate the schema",
+				},
+				{ task: "second item" },
+			],
+		});
+		expect(lines).toContain("Model: anthropic/claude-sonnet-4 → openai/gpt-5");
 	});
 
 	it("summarizes a homogeneous batch whose agents use the session default", async () => {

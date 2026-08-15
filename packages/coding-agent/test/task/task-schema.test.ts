@@ -6,11 +6,9 @@ import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
-// Contract: the single-spawn schema (`task.batch: false`; the exported
-// `taskSchema` instance) carries no batch fields while accepting a caller
-// `model`, `outputSchema`, and its validation mode. The batch shape (`tasks[]` + shared
-// `context`) is gated by the `task.batch` setting (default on, covered by
-// test/task/task-batch.test.ts).
+// Contract: the exported single-spawn `taskSchema` always carries `role`, gates
+// `model` behind task.perCallModel, and never exposes batch-only fields.
+// `task.batch` is covered by test/task/task-batch.test.ts.
 
 describe("task schema (single-spawn)", () => {
 	it("accepts {agent, task}", () => {
@@ -66,6 +64,21 @@ describe("task schema (single-spawn)", () => {
 			expect("schema" in parsed).toBe(false);
 		}
 	});
+
+	it("strips model but preserves role when task.perCallModel is off", () => {
+		const parsed = taskSchema({
+			agent: "scout",
+			task: "Map the auth module.",
+			model: "openai-codex/gpt-5.6-sol:high",
+			role: "Security auditor",
+		});
+		expect(parsed instanceof type.errors).toBe(false);
+		if (!(parsed instanceof type.errors)) {
+			expect("model" in parsed).toBe(false);
+			expect(parsed.role).toBe("Security auditor");
+			expect(parsed.task).toBe("Map the auth module.");
+		}
+	});
 });
 
 describe("task spawn validation", () => {
@@ -73,19 +86,19 @@ describe("task spawn validation", () => {
 		vi.restoreAllMocks();
 	});
 
-	function createSession(): ToolSession {
+	function createSession(settings: Record<string, unknown> = {}): ToolSession {
 		return {
 			cwd: "/tmp",
 			hasUI: false,
-			settings: Settings.isolated({ "task.isolation.enabled": false, "task.batch": false }),
+			settings: Settings.isolated({ "task.isolation.enabled": false, "task.batch": false, ...settings }),
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		} as unknown as ToolSession;
 	}
 
-	async function executeText(params: unknown): Promise<string> {
+	async function executeText(params: unknown, settings: Record<string, unknown> = {}): Promise<string> {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
-		const tool = await TaskTool.create(createSession());
+		const tool = await TaskTool.create(createSession(settings));
 		const result = await tool.execute("tool-call", params);
 		return result.content.find(part => part.type === "text")?.text ?? "";
 	}
@@ -101,4 +114,12 @@ describe("task spawn validation", () => {
 		const text = await executeText({ agent: "scout" });
 		expect(text).toContain("Missing `task`");
 	});
+
+	it.each([{ model: "" }, { model: " " }, { model: [""] }, { model: ["", ""] }])(
+		"rejects an empty model selector (%j)",
+		async invalid => {
+			const text = await executeText({ task: "Work.", ...invalid }, { "task.perCallModel": true });
+			expect(text).toContain("Invalid `model`");
+		},
+	);
 });

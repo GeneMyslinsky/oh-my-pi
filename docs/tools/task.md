@@ -26,10 +26,7 @@
 
 ## Inputs
 
-The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, effort?, outputSchema?, schemaMode?, isolated? }`. `isolated` exists only when `task.isolation.enabled` is true **and plan mode is disabled**; `effort` exists only when `task.enableEffort=true` (default off).
-
-- **Batch shape** (`task.batch` on): `{ context, tasks: item[] }` — one subagent per item, all run under the same fan-out rules; there is no top-level agent field. `context` is **required** shared background rendered into every spawned subagent's system prompt (`CONTEXT` section); `agent`, `outputSchema`, and `schemaMode` are per item. `effort` is added only when its setting enables it; `isolated` additionally requires plan mode to be disabled.
-- **Flat shape** (`task.batch` off): `{ ...item }` — exactly one spawn per call. Shared background goes into a `local://` file (e.g. `local://ctx.md`) that each spawn's `task` references; subagents share the parent's `local://` root.
+The wire schema is shape-swapped by `task.batch` (default on). One unit of work is the task item `{ name?, agent?, task, role?, effort?, outputSchema?, schemaMode?, isolated? }`; `model?` is also present when `task.perCallModel` is enabled (default on). `isolated` exists only when `task.isolation.enabled` is true **and plan mode is disabled**; `effort` exists only when `task.enableEffort=true` (default off).
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -38,7 +35,8 @@ The wire schema is shape-swapped by `task.batch` (default on). One unit of work 
 | `name` | `string` | No | Stable agent name — becomes the registry/IRC id. Defaults to a generated AdjectiveNoun name. Uniquified per session by `AgentOutputManager`. Item field in batch shape, top-level in flat shape. |
 | `agent` | `string` | No | Agent type to run this item (e.g. `scout`). Defaults to the spawn policy's default agent (usually `task`); items in one batch call may use different agent types. Item field in batch shape, top-level in flat shape. |
 | `task` | `string` | Yes | The work — complete, self-contained instructions. Empty-after-trim is rejected. Item field in batch shape, top-level in flat shape. |
-| `effort` | `"lo" \| "med" \| "hi"` | No | Present only with `task.enableEffort=true`. Per-spawn thinking effort, mapped onto the resolved model's supported range (lowest/middle/highest level it tops out at, e.g. `high`/`xhigh`/`max`). Overrides the agent's default selector, including `auto`; omitting it keeps the agent's configured selector — automatic per-prompt classification only for agents configured `auto` (e.g. the bundled `task`); `scout`/`sonic` configure `medium`. Item field in batch shape, top-level in flat shape. |
+| `model` | `string \| string[]` | No | Present when `task.perCallModel=true` (default on). Explicit non-empty model selector or non-empty fallback chain for this spawn. Optional `:reasoning` suffixes are preserved. A literal `"default"` or `"@default"` is treated as omitted (inherits from agent frontmatter). Item field in batch shape, top-level in flat shape. |
+| `role` | `string` (≤256 chars) | No | Specialist persona injected into the subagent system prompt. Shapes the subagent's investigation style and decision-making. Independent of `task.perCallModel`. Item field in batch shape, top-level in flat shape. |
 | `outputSchema` | JSON Schema (`object \| boolean \| string \| null` at the coarse wire-validation layer) | No | Invocation-specific structured-output contract. Takes precedence over agent frontmatter `output` and the inherited parent session schema. Item field in batch shape, top-level in flat shape. |
 | `schemaMode` | `"permissive" \| "strict"` | No | Validation mode for the effective output schema. Overrides the parent session mode; defaults to `permissive`. Item field in batch shape, top-level in flat shape. |
 | `isolated` | `boolean` | No | Run in an isolated workspace and return patches. Exists only when `task.isolation.enabled` is true and plan mode is disabled; per item in batch shape, top-level in flat shape. Isolated agents are torn down at completion — not revivable. |
@@ -51,7 +49,6 @@ There is no legacy per-call `schema` parameter. Use `outputSchema` and optional 
 
 ## Outputs
 
-The tool returns one text block plus `details: TaskToolDetails`.
 
 Background response (`async.enabled=true`):
 - `content`: `` Spawned agent `<id>` (job `<jobId>`). The result will be delivered when it yields. ... `` plus a coordination hint (`hub` DM when messaging is enabled, otherwise `hub` job control). A batch call instead returns `` Spawned N background agents using <agent types>. ... `` (the deduped per-item agent types, comma-joined) with a per-agent `- `<id>` (job `<jobId>`)` listing.
@@ -89,7 +86,7 @@ Artifacts and side channels:
    - a mixed call registers the async jobs first, then runs its blocking items inline and returns once they settle — the text combines the inline summaries with the spawned-job listing, and the block keeps rendering the still-running background rows beside the inline results.
 5. `#executeSync(...)` runs the spawn path (`#runSpawn`), which rediscovers agents from disk, so runtime resolution can differ from the create-time description.
 6. It resolves each spawn's requested `agent` type, rejects unknown or settings-disabled agents, and enforces parent spawn policy plus `PI_BLOCKED_AGENT` self-recursion prevention.
-7. Model priority: `task.agentModelOverrides` → agent frontmatter → configured task role/session fallback. Output schema priority: per-call `outputSchema` → agent frontmatter `output` → inherited parent session schema.
+7. Model priority: per-call `model` (unless `task.perCallModel=false`) → `task.agentModelOverrides` → agent frontmatter → configured task role/session fallback. A per-call `model: "default"` or `"@default"` is treated as omitted, so agent frontmatter wins. Output schema priority: per-call `outputSchema` → agent frontmatter `output` → inherited parent session schema.
 8. Plan mode swaps in an `effectiveAgent` with a read-only tool subset and plan-mode prompt; `runSubprocess(...)` receives the effective agent.
 9. If `isolated`, it requires a git repo (`getRepoRoot(...)` / `captureBaseline(...)`), maps `isolation.backend` to a backend-kind hint (`parseIsolationBackend`), and materializes the workspace via the natives PAL (`ensureIsolation` → `isoResolve`/`isoStart`), walking the candidate list when a backend is unavailable.
 10. Artifacts dir comes from the parent session file when available, otherwise a temp dir. When the session is executing an approved plan, the plan reference is handed to the subagent.

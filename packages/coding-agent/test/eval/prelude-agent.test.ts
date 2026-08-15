@@ -23,7 +23,7 @@ function loadPrelude(callTool: (name: string, args: unknown) => Promise<unknown>
 type AgentHelper = (prompt: string, opts?: Record<string, unknown>) => Promise<unknown>;
 
 describe("eval js agent() handle", () => {
-	it("returns an AgentHandle carrying the bridge id, agent name, and agent:// uri", async () => {
+	it("returns a recoverable handle and forwards an object-form model override", async () => {
 		let seenName: string | undefined;
 		let seenArgs: Record<string, unknown> | undefined;
 		const sandbox = loadPrelude(async (name, args) => {
@@ -31,18 +31,23 @@ describe("eval js agent() handle", () => {
 			seenArgs = args as Record<string, unknown>;
 			return { id: "abc123", agent: "task" };
 		});
+
 		const handle = (await (sandbox.agent as AgentHelper)("say hi", {
-			label: "Greeter",
+			model: ["p/primary", "p/fallback"],
 		})) as Record<string, unknown>;
+
 		expect(seenName).toBe("__agent__");
-		expect(seenArgs).toEqual({ prompt: "say hi", label: "Greeter" });
+		expect(seenArgs).toEqual({
+			prompt: "say hi",
+			model: ["p/primary", "p/fallback"],
+		});
 		expect(handle.kind).toBe("agent");
 		expect(handle.id).toBe("abc123");
 		expect(handle.agent).toBe("task");
 		expect(handle.handle).toBe("agent://abc123");
 	});
 
-	it("maps positional args onto named options in order", async () => {
+	it("keeps positional controls stable while adding model after agent", async () => {
 		let seenArgs: Record<string, unknown> | undefined;
 		const sandbox = loadPrelude(async (_name, args) => {
 			seenArgs = args as Record<string, unknown>;
@@ -55,11 +60,12 @@ describe("eval js agent() handle", () => {
 		) => Promise<unknown>;
 		const schema = { type: "object", properties: { ok: { type: "boolean" } } };
 
-		await positionalAgent("scout", "reviewer", "Legacy", schema, true, false, true, "strict", ["read"]);
+		await positionalAgent("scout", "reviewer", "p/model", "Legacy", schema, true, false, true, "strict", ["read"]);
 
 		expect(seenArgs).toEqual({
 			prompt: "scout",
 			agent: "reviewer",
+			model: "p/model",
 			label: "Legacy",
 			schema,
 			isolated: true,
@@ -94,6 +100,25 @@ describe("eval js agent() handle", () => {
 			wait(): Promise<unknown>;
 		};
 		expect(await plain.wait()).toBe('{"k":1}');
+	});
+
+	it("waits for and caches the completed handle result", async () => {
+		let waits = 0;
+		const sandbox = loadPrelude(async (name, _args) => {
+			if (name === "__agent__") return { id: "done", agent: "task" };
+			if (name === "__wait__") {
+				waits++;
+				return { items: [{ status: "completed", text: "hello world" }] };
+			}
+			throw new Error(`Unexpected bridge call: ${name}`);
+		});
+		const handle = (await (sandbox.agent as AgentHelper)("say hi")) as {
+			wait(): Promise<unknown>;
+		};
+
+		expect(await handle.wait()).toBe("hello world");
+		expect(await handle.wait()).toBe("hello world");
+		expect(waits).toBe(1);
 	});
 });
 

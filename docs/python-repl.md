@@ -142,13 +142,10 @@ The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-
 
 ## Tool availability and mode selection
 
-The backend settings `eval.py` / `eval.js` default to `true`. Optional boolean environment flags `PI_PY` and `PI_JS` override their corresponding setting independently. `eval.tools.enabled` also defaults to `true`; turning it off removes the `tools` spawn fields and kernel-defined-tool guidance.
+The backend settings `eval.py` / `eval.js` default to `true`. Optional boolean environment flags `PI_PY` and `PI_JS` override their corresponding setting independently. `eval.tools.enabled` also defaults to `true`; turning it off removes the `tools` spawn fields and kernel-defined-tool guidance. `task.perCallModel` defaults to `true`; turning it off rejects per-call `model` overrides from the eval `agent()` helper.
 
 The tool's session-scoped schema lists only enabled runtimes. If Python preflight fails while another runtime is enabled, `eval` remains available for that runtime and a `py` call reports a Python-backend availability error with enabled alternatives.
 
-Python prelude helpers include `agent(prompt, *, agent=None, label=None, schema=None, schema_mode=None, isolated=None, apply=None, merge=None, tools=None)`, which registers a background subagent job and returns an `AgentHandle` (`.id`, `.handle` = `agent://<id>`, `.status`, `.done()`, `.wait(timeout=None)`, `.send()`, `.cancel()`, `.output()`, awaitable). `completion(...)` likewise returns a `CompletionHandle`. `wait(handles, timeout=None, raise_errors=True)` barriers over handles in input order. `workpool(...)` returns a `WorkPool` (`push`, `status`, `peek`, `close`); its name is the aggregate async-job id used with `hub wait`. `tool.<name>(args)` is a coroutine (`await tool.read({...})`); `@tool` registers a kernel-local function as a tool for subagents (schema inferred from type hints) when `eval.tools.enabled` is on.
-
-The runner accepts a `{"type": "tool", "id", "op": "describe"|"call", ...}` request alongside cell requests. It is served on a dedicated daemon thread (POSIX; between cells on Windows) against the kernel's `__omp_tools__` registry, replies with an `application/json` display bundle (`{ok, tools, missing}` or `{ok, value}`), and reports a raising tool as an `error` frame without touching the running cell. See `docs/tools/eval.md` for the caller-facing contract.
 
 ## Execution flow and cancellation/timeout
 

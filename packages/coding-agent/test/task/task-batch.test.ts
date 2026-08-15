@@ -224,6 +224,28 @@ describe("task.batch schema gating", () => {
 		const batch = await TaskTool.create(createSession({ settings: { "task.batch": true } }));
 		expect(getSchemaProperties(batch).schema).toBeUndefined();
 	});
+
+	it("exposes role in all shapes and gates model on task.perCallModel", async () => {
+		mockDiscovery();
+
+		const flatSession = createSession({ settings: { "task.batch": false } });
+		const flat = await TaskTool.create(flatSession);
+		expect(getSchemaProperties(flat).model).toBeDefined();
+		expect(getSchemaProperties(flat).role).toBeDefined();
+
+		flatSession.settings.override("task.perCallModel", false);
+		expect(getSchemaProperties(flat).model).toBeUndefined();
+		expect(getSchemaProperties(flat).role).toBeDefined();
+
+		const batchSession = createSession({ settings: { "task.batch": true } });
+		const batch = await TaskTool.create(batchSession);
+		expect(getBatchItemProperties(batch).model).toBeDefined();
+		expect(getBatchItemProperties(batch).role).toBeDefined();
+
+		batchSession.settings.override("task.perCallModel", false);
+		expect(getBatchItemProperties(batch).model).toBeUndefined();
+		expect(getBatchItemProperties(batch).role).toBeDefined();
+	});
 });
 
 describe("task.batch validation", () => {
@@ -307,6 +329,17 @@ describe("task.batch validation", () => {
 		expect(text).toContain("task.batch is disabled");
 		expect(text).not.toContain("was missing");
 	});
+
+	it("rejects an empty per-item model selector", async () => {
+		const text = await executeText(
+			{
+				context: "Background.",
+				tasks: [{ name: "Alpha", task: "Work.", model: [""] }],
+			},
+			{ "task.batch": true, "task.perCallModel": true },
+		);
+		expect(text).toContain("invalid `model`");
+	});
 });
 
 describe("task.batch spawning", () => {
@@ -332,7 +365,7 @@ describe("task.batch spawning", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	it("spawns one background job per task item and forwards independent models and schemas with shared context", async () => {
+	it("forwards independent roles and schemas with shared context when model overrides are disabled", async () => {
 		mockDiscovery({
 			...taskAgent,
 			output: { type: "object", properties: { staleAgentOutput: { type: "boolean" } } },
@@ -343,6 +376,7 @@ describe("task.batch spawning", () => {
 			assignment?: string;
 			parentAgentId?: string;
 			modelOverride?: string | string[];
+			role?: string;
 			outputSchema?: unknown;
 			outputSchemaMode?: "permissive" | "strict";
 			outputSchemaSource?: "caller" | "agent" | "session" | "none";
@@ -355,6 +389,7 @@ describe("task.batch spawning", () => {
 				assignment: options.assignment,
 				parentAgentId: options.parentAgentId,
 				modelOverride: options.modelOverride,
+				role: options.role,
 				outputSchema: options.outputSchema,
 				outputSchemaMode: options.outputSchemaMode,
 				outputSchemaSource: options.outputSchemaSource,
@@ -365,7 +400,11 @@ describe("task.batch spawning", () => {
 
 		const manager = createManager();
 		const tool = await TaskTool.create(
-			createSession({ manager, agentId: "ParentA", settings: { "async.enabled": true, "task.batch": true } }),
+			createSession({
+				manager,
+				agentId: "ParentA",
+				settings: { "async.enabled": true, "task.batch": true, "task.perCallModel": false },
+			}),
 		);
 		const alphaSchema = { type: "object", properties: { alpha: { type: "string" } } };
 		const betaSchema = { type: "object", properties: { beta: { type: "number" } } };
@@ -375,12 +414,14 @@ describe("task.batch spawning", () => {
 				{
 					name: "Alpha",
 					task: "Do A.",
+					role: "Alpha specialist",
 					outputSchema: alphaSchema,
 					schemaMode: "strict",
 				},
 				{
 					name: "Beta",
 					task: "Do B.",
+					role: "Beta specialist",
 					outputSchema: betaSchema,
 					schemaMode: "permissive",
 				},
@@ -409,8 +450,10 @@ describe("task.batch spawning", () => {
 		}
 		const byId = new Map(seen.map(spawn => [spawn.id, spawn]));
 		expect(byId.get("Alpha")?.outputSchema).toEqual(alphaSchema);
+		expect(byId.get("Alpha")?.role).toBe("Alpha specialist");
 		expect(byId.get("Alpha")?.outputSchemaMode).toBe("strict");
 		expect(byId.get("Beta")?.outputSchema).toEqual(betaSchema);
+		expect(byId.get("Beta")?.role).toBe("Beta specialist");
 		expect(byId.get("Beta")?.outputSchemaMode).toBe("permissive");
 		expect(seen.map(spawn => spawn.assignment).sort()).toEqual(["Do A.", "Do B."]);
 		for (const spawn of seen) expect(spawn.parentAgentId).toBe("ParentA");
@@ -703,5 +746,49 @@ describe("task.batch spawning", () => {
 		expect(last?.async?.state).toBe("failed");
 		expect(last?.progress?.find(p => p.id === "Second")?.status).toBe("aborted");
 		expect(last?.progress?.find(p => p.id === "First")?.status).toBe("completed");
+	});
+
+	it("forwards per-item model when task.perCallModel is on and suppresses it when off", async () => {
+		mockDiscovery();
+		const seen: Array<{ id?: string; modelOverride?: string | string[] }> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			seen.push({ id: options.id, modelOverride: options.modelOverride });
+			return makeResult(options.id ?? "?");
+		});
+
+		// Gate ON: model forwarded
+		const managerOn = createManager();
+		const toolOn = await TaskTool.create(
+			createSession({
+				manager: managerOn,
+				settings: { "async.enabled": true, "task.batch": true, "task.perCallModel": true },
+			}),
+		);
+		const resultOn = await toolOn.execute("tc-model-on", {
+			context: "ctx",
+			tasks: [{ name: "GatedOn", task: "Work.", model: "openai-codex/gpt-5.6-sol:high" }],
+		} as TaskParams);
+		await managerOn.getJob(resultOn.details!.async!.jobId)!.promise;
+		const gatedOnSpawn = seen.find(s => s.id === "GatedOn");
+		expect(gatedOnSpawn?.modelOverride).toEqual(["openai-codex/gpt-5.6-sol:high"]);
+
+		// Gate OFF: model NOT forwarded (defense in depth)
+		seen.length = 0;
+		const managerOff = createManager();
+		const toolOff = await TaskTool.create(
+			createSession({
+				manager: managerOff,
+				settings: { "async.enabled": true, "task.batch": true, "task.perCallModel": false },
+			}),
+		);
+		const resultOff = await toolOff.execute("tc-model-off", {
+			context: "ctx",
+			// model present in raw params but gate is off — schema strips it,
+			// and defense-in-depth in #resolveSpawnPreflight also suppresses it
+			tasks: [{ name: "GatedOff", task: "Work.", model: "openai-codex/gpt-5.6-sol:high" }],
+		} as TaskParams);
+		await managerOff.getJob(resultOff.details!.async!.jobId)!.promise;
+		const gatedOffSpawn = seen.find(s => s.id === "GatedOff");
+		expect(gatedOffSpawn?.modelOverride).toEqual([]);
 	});
 });
