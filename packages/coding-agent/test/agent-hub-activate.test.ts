@@ -608,7 +608,7 @@ describe("Agent hub double-← gating", () => {
 		resetSettingsForTest();
 	});
 
-	function setup(agents: AgentRegistry, sessionFile: string | null = null) {
+	function setup(agents: AgentRegistry, sessionFile: string | null | (() => string | null) = null) {
 		let shown: AgentHubOverlayComponent | undefined;
 		let overlayOptions: Record<string, unknown> | undefined;
 		const shownReady = Promise.withResolvers<AgentHubOverlayComponent>();
@@ -637,7 +637,10 @@ describe("Agent hub double-← gating", () => {
 			collabGuest: { agentRegistry: agents, hubRemote: undefined },
 			focusAgentSession: async () => {},
 			session: { getToolByName: () => undefined, extensionRunner: undefined },
-			sessionManager: { getCwd: () => TEST_CWD, getSessionFile: () => sessionFile },
+			sessionManager: {
+				getCwd: () => TEST_CWD,
+				getSessionFile: () => (typeof sessionFile === "function" ? sessionFile() : sessionFile),
+			},
 			hideThinkingBlock: false,
 		};
 		const controller = new SelectorController(ctx as unknown as InteractiveModeContext);
@@ -662,6 +665,57 @@ describe("Agent hub double-← gating", () => {
 			status: "running",
 		});
 	}
+
+	it("uses the current session file on every open, including after a cancelled new session", async () => {
+		using tempDir = TempDir.createSync("@omp-agent-hub-current-session-");
+		const firstSession = path.join(tempDir.path(), "first.jsonl");
+		const secondSession = path.join(tempDir.path(), "second.jsonl");
+		await Bun.write(firstSession, "");
+		await Bun.write(secondSession, "");
+		const agents = new AgentRegistry();
+		agents.register({
+			id: "Main",
+			displayName: "Main",
+			kind: "main",
+			session: null,
+			sessionFile: firstSession,
+			status: "running",
+		});
+		agents.register({
+			id: "FirstChild",
+			displayName: "FirstChild",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+			sessionFile: path.join(tempDir.path(), "first", "FirstChild.jsonl"),
+			status: "running",
+		});
+		agents.register({
+			id: "SecondChild",
+			displayName: "SecondChild",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+			sessionFile: path.join(tempDir.path(), "second", "SecondChild.jsonl"),
+			status: "running",
+		});
+		let currentSessionFile = firstSession;
+		const { controller, shown } = setup(agents, () => currentSessionFile);
+		const expectRoster = async (id: string) => {
+			controller.showAgentHub(new SessionObserverRegistry());
+			const hub = shown();
+			if (!hub) throw new Error("Expected Agent Hub");
+			await hub.persistedSubagentsReady;
+			expect(renderedRosterIds(hub, 120)).toEqual([id]);
+			hub.dispose();
+		};
+
+		await expectRoster("FirstChild");
+		currentSessionFile = secondSession;
+		await expectRoster("SecondChild");
+		// A cancelled `newSession()` leaves SessionManager's current file intact.
+		await expectRoster("SecondChild");
+	});
 
 	it("requireContent keeps the hub closed when only Main is registered", () => {
 		const agents = new AgentRegistry();

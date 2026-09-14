@@ -6,6 +6,7 @@
  * agents that appear while the hub is open are appended at the end.
  */
 import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi } from "bun:test";
+import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
@@ -15,8 +16,8 @@ import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { AgentActivityIndex, type AgentActivityRow } from "../src/activity";
-
 interface GeometryStub {
 	setRows(n: number): void;
 	restore(): void;
@@ -148,6 +149,98 @@ describe("Agent hub row ordering", () => {
 			expect(rendered).toContain("No agents in this session");
 			expect(rendered).toContain("Finished, parked, and killed subagents remain with the session");
 			expect(rendered).toContain("Resume that session with omp-dev --continue, or spawn a task here.");
+		} finally {
+			hub.dispose();
+		}
+	});
+
+	it("scopes every status to the current session tree without releasing old history", async () => {
+		using tempDir = TempDir.createSync("@omp-agent-hub-session-scope-");
+		const oldRoot = path.join(tempDir.path(), "session-old.jsonl");
+		const currentRoot = path.join(tempDir.path(), "session.jsonl");
+		await Bun.write(oldRoot, "");
+		await Bun.write(currentRoot, "");
+		const agents = new AgentRegistry();
+		agents.register({
+			id: "Main",
+			displayName: "Main",
+			kind: "main",
+			session: null,
+			sessionFile: oldRoot,
+			status: "running",
+		});
+		const oldHistory = { agent: "task" };
+		for (const [id, status] of [
+			["OldRunning", "running"],
+			["OldIdle", "idle"],
+			["OldParked", "parked"],
+			["OldAborted", "aborted"],
+		] as const) {
+			agents.register({
+				id,
+				displayName: id,
+				kind: "sub",
+				parentId: "Main",
+				session: null,
+				sessionFile: path.join(tempDir.path(), "session-old", `${id}.jsonl`),
+				status,
+				history: oldHistory,
+			});
+		}
+		agents.register({
+			id: "CurrentChild",
+			displayName: "CurrentChild",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+			sessionFile: path.join(tempDir.path(), "session", "CurrentChild.jsonl"),
+			status: "running",
+		});
+		agents.register({
+			id: "CurrentGrandchild",
+			displayName: "CurrentGrandchild",
+			kind: "sub",
+			parentId: "CurrentChild",
+			session: null,
+			sessionFile: path.join(tempDir.path(), "session", "CurrentChild", "CurrentGrandchild.jsonl"),
+			status: "idle",
+		});
+		const activity = new AgentActivityIndex();
+		activity.setLive("OldRunning", [
+			{
+				id: "old-activity",
+				agentId: "OldRunning",
+				timestamp: 1,
+				kind: "response",
+				title: "Old response",
+				summary: "old session activity",
+				status: "success",
+				source: "live",
+			},
+		]);
+		activity.setLive("CurrentChild", [
+			{
+				id: "current-activity",
+				agentId: "CurrentChild",
+				timestamp: 2,
+				kind: "response",
+				title: "Current response",
+				summary: "current session activity",
+				status: "success",
+				source: "live",
+			},
+		]);
+		const hub = makeHub(agents, { activity, sessionFile: currentRoot });
+
+		try {
+			await hub.persistedSubagentsReady;
+			expect(renderedAgentIds(hub)).toEqual(["CurrentChild", "CurrentGrandchild"]);
+			expect(agents.get("OldRunning")?.history).toBe(oldHistory);
+			expect(agents.get("OldAborted")?.status).toBe("aborted");
+			hub.handleInput("2");
+			const activityView = Bun.stripANSI(hub.render(120).join("\n"));
+			expect(activityView).toContain("current session activity");
+			expect(activityView).not.toContain("old session activity");
 		} finally {
 			hub.dispose();
 		}

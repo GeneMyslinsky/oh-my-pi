@@ -39,7 +39,7 @@ import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { IrcBus } from "../../irc/bus";
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, type AgentStatus, MAIN_AGENT_ID } from "../../registry/agent-registry";
-import { registerPersistedSubagents } from "../../registry/persisted-agents";
+import { registerPersistedSubagents, sessionFileBelongsToRoot } from "../../registry/persisted-agents";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { shortenPath, truncateToWidth } from "../../tools/render-utils";
 import { formatLocalDateTimeWithOffset } from "../../utils/local-date";
@@ -176,7 +176,7 @@ export interface AgentHubDeps {
 	expandKeys?: KeyId[];
 	/** Focus the main view on this agent's live session (ctx.focusAgentSession). When absent (collab guest, tests), Enter opens the in-hub chat view instead. */
 	focusAgent?: (id: string) => Promise<void>;
-	/** Current main session file; used to seed parked historical subagents after restart. */
+	/** Current main session file; scopes local roster rows and seeds saved subagents after restart. */
 	sessionFile?: string | null;
 	/** Initial top-level projection; slash commands deep-link into this surface. */
 	initialSection?: AgentHubSection;
@@ -200,6 +200,8 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 	#ageTimer: NodeJS.Timeout | undefined;
 	#dataChangeTimer?: NodeJS.Timeout;
 	#remote: AgentHubRemote | undefined;
+	/** Current local main-session transcript; remote hosts own their roster scope. */
+	#rootSessionFile: string | undefined;
 	#disposed = false;
 	/** Resolves after persisted historical subagents have been registered and rows refreshed. */
 	readonly persistedSubagentsReady: Promise<void>;
@@ -220,6 +222,8 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 
 	// Table state
 	#rows: AgentRef[] = [];
+	/** IDs admitted to this session's roster, reused to scope the Activity tab. */
+	#rosterAgentIds = new Set<string>();
 	#statusCounts: Record<AgentStatus, number> = { running: 0, idle: 0, parked: 0, aborted: 0 };
 	#selectedRow = 0;
 	/** Stable roster order captured on first refresh: keyboard navigation must
@@ -298,6 +302,10 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 		this.#requestRender = deps.requestRender;
 		this.#hubKeys = deps.hubKeys;
 		this.#remote = deps.remote;
+		this.#rootSessionFile =
+			!this.#remote && typeof deps.sessionFile === "string" && deps.sessionFile.endsWith(".jsonl")
+				? deps.sessionFile
+				: undefined;
 		this.#loadingPersistedSubagents = !this.#remote && Boolean(deps.sessionFile?.endsWith(".jsonl"));
 		this.#ui =
 			deps.ui ??
@@ -509,7 +517,17 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 
 	#refreshRows(): void {
 		const selectedId = this.#rows[this.#selectedRow]?.id;
-		const refs = this.#registry.list().filter(ref => ref.id !== MAIN_AGENT_ID);
+		const refs = this.#registry
+			.list()
+			.filter(
+				ref =>
+					ref.id !== MAIN_AGENT_ID &&
+					(!this.#rootSessionFile ||
+						!ref.sessionFile ||
+						sessionFileBelongsToRoot(ref.sessionFile, this.#rootSessionFile)),
+			);
+		this.#rosterAgentIds.clear();
+		for (const ref of refs) this.#rosterAgentIds.add(ref.id);
 		this.#observedById = new Map();
 		for (const session of this.#observers.getSessions()) this.#observedById.set(session.id, session);
 		// Stable roster order: capture the status+recency ranking once so keyboard
@@ -621,8 +639,8 @@ export class AgentHubOverlayComponent extends Container implements SelectListMou
 			});
 	}
 
-	#activityAgentIds(): ReadonlySet<string> | undefined {
-		if (this.#activityScope === "all") return undefined;
+	#activityAgentIds(): ReadonlySet<string> {
+		if (this.#activityScope === "all") return this.#rosterAgentIds;
 		const selected = this.#rows[this.#selectedRow]?.id;
 		if (!selected) return new Set();
 		const ids = new Set([selected]);
