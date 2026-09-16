@@ -242,12 +242,16 @@ export function createPersistedSubagentReviverFactory(
 			};
 			// Persisted transcript totals become the baseline so the roster row
 			// keeps counting up across the revive instead of resetting to this turn.
+			// Wake-turn progress is published as active runtime, and the persisted
+			// duration is a transcript span (idle gaps included), so only an
+			// active-kind duration may seed it.
+			const metrics = ref.history?.metrics;
 			const lifetime: SubagentLifetimeTotals = {
-				requests: ref.history?.metrics?.requests ?? 0,
-				tokens: ref.history?.metrics?.tokens ?? 0,
-				toolCount: ref.history?.metrics?.tools ?? 0,
-				cost: ref.history?.metrics?.cost ?? 0,
-				durationMs: ref.history?.metrics?.durationMs ?? 0,
+				requests: metrics?.requests ?? 0,
+				tokens: metrics?.tokens ?? 0,
+				toolCount: metrics?.tools ?? 0,
+				cost: metrics?.cost ?? 0,
+				durationMs: metrics?.durationKind === "active" ? metrics.durationMs : 0,
 			};
 			attachIrcWakeTurnMonitor(session, {
 				id: ref.id,
