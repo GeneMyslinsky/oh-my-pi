@@ -677,6 +677,8 @@ describe("persisted subagent revival", () => {
 		});
 		rpcRegistry.setSubscriptionLevel("progress");
 		const ref = createRef(sessionFile);
+		// Transcript-derived totals the registry restored for the parked ref.
+		ref.history = { metrics: { tokens: 1000, requests: 7, tools: 3, cost: 1.5, durationMs: 4000 } };
 		AgentRegistry.global().register({
 			id: ref.id,
 			displayName: ref.displayName,
@@ -713,6 +715,12 @@ describe("persisted subagent revival", () => {
 		if (last?.type !== "subagent_lifecycle") throw new Error("expected terminal lifecycle frame");
 		expect(last.payload.id).toBe(ref.id);
 		expect(last.payload.status).not.toBe("started");
+		// The wake turn publishes on top of the persisted totals, so the roster
+		// row continues the agent's lifetime instead of restarting at zero.
+		const progress = frames.find(frame => frame.type === "subagent_progress");
+		expect(progress).toMatchObject({
+			payload: { progress: { requests: 7, tokens: 1000, toolCount: 3, cost: 1.5 } },
+		});
 		rpcRegistry.dispose();
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();

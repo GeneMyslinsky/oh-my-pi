@@ -14,7 +14,12 @@ import type { AgentSession } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { extractSessionInit, hasConversationalHistory, SessionManager } from "../session/session-manager";
 import type { EventBus } from "../utils/event-bus";
-import { attachIrcWakeTurnMonitor, createMCPProxyTools, createSubagentSettings } from "./executor";
+import {
+	attachIrcWakeTurnMonitor,
+	createMCPProxyTools,
+	createSubagentSettings,
+	type SubagentLifetimeTotals,
+} from "./executor";
 import type { AgentDefinition } from "./types";
 
 /**
@@ -235,6 +240,15 @@ export function createPersistedSubagentReviverFactory(
 				systemPrompt: init.systemPrompt,
 				source: "user",
 			};
+			// Persisted transcript totals become the baseline so the roster row
+			// keeps counting up across the revive instead of resetting to this turn.
+			const lifetime: SubagentLifetimeTotals = {
+				requests: ref.history?.metrics?.requests ?? 0,
+				tokens: ref.history?.metrics?.tokens ?? 0,
+				toolCount: ref.history?.metrics?.tools ?? 0,
+				cost: ref.history?.metrics?.cost ?? 0,
+				durationMs: ref.history?.metrics?.durationMs ?? 0,
+			};
 			attachIrcWakeTurnMonitor(session, {
 				id: ref.id,
 				agent: wakeAgent,
@@ -246,6 +260,7 @@ export function createPersistedSubagentReviverFactory(
 				// Anchor artifacts to the revived ref's own dir (its parent's children
 				// dir), not the live root session's, matching the spawn callers (#11563).
 				artifactsDir: path.dirname(sessionFile),
+				lifetime,
 			});
 			return session;
 		};
