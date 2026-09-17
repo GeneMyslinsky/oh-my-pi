@@ -2838,14 +2838,6 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				providerError ??
 				(thrown instanceof Error ? thrown.message : thrown === undefined ? undefined : String(thrown));
 			turnMonitor.finish();
-			if (options.lifetime) {
-				const turn = turnMonitor.progress;
-				options.lifetime.requests += turn.requests;
-				options.lifetime.tokens += turn.tokens;
-				options.lifetime.toolCount += turn.toolCount;
-				options.lifetime.cost += turn.cost;
-				options.lifetime.durationMs += Date.now() - turnStartTime;
-			}
 			if (yielded) {
 				// Acceptance boundary for an autonomous wake turn (#11079): the
 				// turn's terminal yield is settled, so terminalize the ref here
@@ -2893,6 +2885,19 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					error: caught instanceof Error ? caught.message : String(caught),
 				});
 			} finally {
+				// Fold after finalization: it re-emits a final snapshot whose
+				// durationMs is later than at finish(), and the next wake's baseline
+				// must equal the last published total or the roster moves backward.
+				// Uses the monitor's own last-published progress, so a failed
+				// finalization folds exactly what observers saw.
+				if (options.lifetime) {
+					const turn = turnMonitor.progress;
+					options.lifetime.requests += turn.requests;
+					options.lifetime.tokens += turn.tokens;
+					options.lifetime.toolCount += turn.toolCount;
+					options.lifetime.cost += turn.cost;
+					options.lifetime.durationMs += turn.durationMs;
+				}
 				// Unconditional: a failed, cancelled, empty, or even un-finalized
 				// wake turn must still tell whoever woke it, or a `send await:true`
 				// waiter mistakes a dead peer for a healthy-but-silent one.
